@@ -1,0 +1,1601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Catch the Falling Stars</title>
+<style>
+  /* Basic page styling */
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* Extra space around the edges so the game isn't crammed into a corner */
+    padding: 40px 20px 60px;
+    box-sizing: border-box;
+    min-height: 100vh;
+    background: #0b1026;
+    color: #fff;
+    font-family: Arial, sans-serif;
+  }
+
+  h1 {
+    margin: 0 0 20px 0;
+    font-size: 36px;
+    text-align: center;
+  }
+
+  /* Score, lives and level display */
+  #info {
+    position: relative; /* so the "-1" indicator can be placed next to it */
+    display: flex;
+    gap: 16px;
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+
+  /* Each piece of the HUD (Score, Lives) gets its own rounded badge */
+  .hud-badge {
+    background: linear-gradient(180deg, #2c3666, #181d3d);
+    border: 1px solid #5a6ac0;
+    border-radius: 10px;
+    padding: 10px 22px;
+    font-weight: bold;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  }
+
+  /* The floating "-1" shown when a life is lost */
+  #lifeLostIndicator {
+    position: absolute;
+    top: -5px;
+    right: -30px; /* sits just to the right of the info text */
+    color: #ff4444;
+    font-weight: bold;
+    font-size: 20px;
+    opacity: 0; /* hidden until animated */
+    pointer-events: none;
+  }
+
+  /* Slowly fade in, then slowly fade out */
+  #lifeLostIndicator.show-anim {
+    animation: fadeInOut 1.5s ease-in-out;
+  }
+
+  @keyframes fadeInOut {
+    0%   { opacity: 0; transform: translateY(0); }
+    30%  { opacity: 1; transform: translateY(-5px); }
+    70%  { opacity: 1; transform: translateY(-10px); }
+    100% { opacity: 0; transform: translateY(-15px); }
+  }
+
+  /* Row that holds the canvas (with its overlays) and the level panel */
+  #gameArea {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 18px;
+    flex-wrap: wrap; /* lets the level panel drop below on narrow screens */
+  }
+
+  /* Wrapper so we can place screens on top of the canvas */
+  #gameWrapper {
+    position: relative;
+  }
+
+  /* The game area where stars fall */
+  #gameCanvas {
+    border: 2px solid #fff;
+    display: block;
+  }
+
+  /* Panel on the right side of the screen showing the current level */
+  #levelPanel {
+    width: 110px;
+    height: 480px; /* matches the taller canvas so it lines up nicely */
+    box-sizing: border-box;
+    border: 1px solid #5a6ac0;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #2c3666, #181d3d);
+    text-align: center;
+    padding-top: 20px;
+    font-size: 18px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  }
+
+  #levelValue {
+    font-size: 38px;
+    font-weight: bold;
+    color: #ffd700;
+    margin-top: 8px;
+    text-shadow: 0 0 8px rgba(255, 215, 0, 0.7);
+  }
+
+  /* Big "Level X" message that flashes in the center when leveling up */
+  #levelUpMessage {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6);
+    font-size: 46px;
+    font-weight: bold;
+    color: #ffd700;
+    text-shadow: 0 0 10px rgba(255, 215, 0, 0.9), 0 0 22px rgba(255, 255, 255, 0.6);
+    opacity: 0;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* Fade and scale the level-up message in, then back out */
+  #levelUpMessage.show-anim {
+    animation: levelUpAnim 1.5s ease-in-out;
+  }
+
+  @keyframes levelUpAnim {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+    20%  { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+    40%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    80%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.25); }
+  }
+
+  /* Small banner shown near the top when a new obstacle type first appears */
+  #notificationMessage {
+    position: absolute;
+    top: 18%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6);
+    font-size: 28px;
+    font-weight: bold;
+    color: #7fdfff;
+    text-shadow: 0 0 10px rgba(127, 223, 255, 0.9), 0 0 18px rgba(255, 255, 255, 0.6);
+    opacity: 0;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* Re-use the same fade/scale animation as the level-up message */
+  #notificationMessage.show-anim {
+    animation: levelUpAnim 1.5s ease-in-out;
+  }
+
+  /* Shared style for the start screen, pause screen and game over screen */
+  .overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .overlay h2 {
+    margin: 0 0 12px 0;
+    font-size: 28px;
+  }
+
+  .overlay p {
+    margin: 0 0 15px 0;
+    max-width: 420px;
+    font-size: 16px;
+    padding: 0 20px;
+  }
+
+  /* Buttons row below the canvas */
+  #controls {
+    margin-top: 20px;
+  }
+
+  button {
+    margin: 0 8px;
+    padding: 14px 32px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #fff;
+    background: linear-gradient(180deg, #4d5dc4, #2c3666);
+    border: 1px solid #6c7bd6;
+    border-radius: 10px;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    transition: transform 0.1s ease, background 0.2s ease;
+  }
+
+  button:hover {
+    background: linear-gradient(180deg, #5d6dd8, #3a4480);
+  }
+
+  button:active {
+    transform: scale(0.96);
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+</style>
+</head>
+<body>
+
+<h1>Catch the Falling Stars</h1>
+
+<!-- Shows current score and lives -->
+<div id="info">
+  <span class="hud-badge" id="scoreDisplay">Score: 0</span>
+  <span class="hud-badge" id="livesDisplay">Lives: 3</span>
+  <!-- Appears briefly to show "-1" when a life is lost -->
+  <span id="lifeLostIndicator">-1</span>
+</div>
+
+<div id="gameArea">
+  <div id="gameWrapper">
+    <!-- The canvas is where we draw the background, basket and stars -->
+    <canvas id="gameCanvas" width="600" height="480"></canvas>
+
+    <!-- Start screen, shown before the game begins -->
+    <div id="startScreen" class="overlay">
+      <h2>Catch the Falling Stars</h2>
+      <p>Use the LEFT and RIGHT arrow keys to move the basket and catch the falling stars.
+         If a star falls past the basket, you lose a life. Lose all your lives and the game ends.</p>
+      <p>Golden stars are worth +3 points, fall faster, and never cost you a life if missed!</p>
+      <p>Watch out for dark bombs - catching one costs you a life!</p>
+      <p>From level 2, gusts of wind can push the stars and your basket. From level 3, icy stars will slow your basket down if caught. From level 4, watch out for lightning strikes!</p>
+      <button id="startBtn">Start Game</button>
+    </div>
+
+    <!-- Game over screen, shown when lives reach 0 -->
+    <div id="gameOverScreen" class="overlay" style="display: none;">
+      <h2>Game Over!</h2>
+      <p id="finalScore"></p>
+      <button id="gameOverRestartBtn">Restart Game</button>
+    </div>
+
+    <!-- Pause screen, shown while the game is paused -->
+    <div id="pauseScreen" class="overlay" style="display: none;">
+      <p>Game is paused. Want to continue?</p>
+    </div>
+
+    <!-- Big "Level X" message, briefly shown when the player levels up -->
+    <div id="levelUpMessage"></div>
+
+    <!-- Small banner shown the first time a new obstacle type appears -->
+    <div id="notificationMessage"></div>
+  </div>
+
+  <!-- Level panel on the right side of the screen -->
+  <div id="levelPanel">
+    Level
+    <div id="levelValue">1</div>
+  </div>
+</div>
+
+<!-- Buttons shown while the game is in progress -->
+<div id="controls">
+  <button id="pauseBtn">Pause</button>
+  <button id="restartBtn">Restart</button>
+  <button id="soundBtn">Sound Effects: On</button>
+  <button id="musicBtn">Music: On</button>
+</div>
+
+<script>
+  // Get the canvas and its drawing context
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Get the HUD (heads-up display) elements
+  const scoreDisplay = document.getElementById('scoreDisplay');
+  const livesDisplay = document.getElementById('livesDisplay');
+  const levelValueDisplay = document.getElementById('levelValue');
+  const levelUpMessage = document.getElementById('levelUpMessage');
+  const notificationMessage = document.getElementById('notificationMessage');
+
+  // Get the overlay screens
+  const startScreen = document.getElementById('startScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScoreText = document.getElementById('finalScore');
+  const pauseScreen = document.getElementById('pauseScreen');
+  const lifeLostIndicator = document.getElementById('lifeLostIndicator');
+
+  // Get the buttons
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const gameOverRestartBtn = document.getElementById('gameOverRestartBtn');
+  const soundBtn = document.getElementById('soundBtn');
+  const musicBtn = document.getElementById('musicBtn');
+
+  // ----- Game settings -----
+  const basketWidth = 80;
+  const basketHeight = 20;
+  const basketSpeed = 6; // how fast the basket moves left/right
+
+  const starSize = 22; // size of a normal star (made bigger so it's easy to see)
+  const bonusStarSize = 24; // size of a golden bonus star (slightly bigger)
+  const obstacleSize = 22; // size of a falling obstacle (meteor/bomb)
+  const iceStarSize = 22; // size of a falling ice star (level 3+ obstacle)
+  const baseStarSpeed = 2; // starting falling speed for normal stars
+
+  // How long (in frames) the basket stays "frozen" (slowed down) after
+  // catching an ice star. 60 frames is about 1 second.
+  const ICE_SLOW_DURATION = 150; // ~2.5 seconds at 60fps
+
+  // How long (in frames) a single wind gust lasts
+  const WIND_GUST_DURATION = 150; // ~2.5 seconds at 60fps
+
+  // Timing for the lightning strike animation (level 4+)
+  const LIGHTNING_STRIKE_FRAME = 20; // frame at which the bolt actually strikes
+  const LIGHTNING_TOTAL_FRAMES = 30; // total frames the lightning animation lasts
+
+  // ----- Game state variables -----
+  let basketX; // basket's left edge position
+  let stars = []; // list of falling stars
+  let score = 0;
+  let lives = 3;
+  let level = 1;
+  let previousLevel = 1; // used to detect when the player reaches a new level
+  let gameOver = false;
+  let isPaused = false;
+  let gameStarted = false; // true once the player clicks "Start Game"
+
+  // Controls how often a golden bonus star appears (every 4-5 normal stars)
+  let starsUntilBonus = 4 + Math.floor(Math.random() * 2); // 4 or 5
+
+  // Background decoration objects
+  let bgStars = []; // small twinkling night-sky stars
+  let clouds = []; // clouds drifting across the sky (present from level 1)
+  let extraCloudsAdded = false; // makes sure the level-2 extra clouds are only added once
+  let bgTime = 0; // used to animate the twinkling stars
+
+  // ----- Obstacle / level progression state -----
+  // Counts how many stars/obstacles have spawned since the current level started.
+  // Used to guarantee certain obstacles show up at specific points in a level.
+  let spawnIndexInLevel = 0;
+
+  // Ice star effect: while this is above 0, the basket moves more slowly
+  let iceEffectTimer = 0;
+
+  // Wind gust effect: windForce pushes falling stars (and slightly the basket)
+  // sideways. windTimer counts down the remaining frames of the current gust.
+  let windForce = 0;
+  let windTimer = 0;
+
+  // Lightning strike: null when no strike is happening, otherwise an object
+  // { x, timer } describing where the bolt is and how far through its animation
+  let lightning = null;
+
+  // Flags so the "Wind!", "Ice Star!" and "Lightning!" notifications only show
+  // the very first time each obstacle type appears
+  let windIntroduced = false;
+  let iceIntroduced = false;
+  let lightningIntroduced = false;
+
+  // ----- Explosion (bomb hit) animation state -----
+  // When a bomb is caught, this object is filled in with particle data.
+  // While it is not null, the explosion is drawn and the basket shakes.
+  let explosion = null;
+  const EXPLOSION_DURATION = 30; // how many frames the explosion animation lasts
+  const SHAKE_DURATION = 15; // how many of those frames also shake the basket
+
+  // Track which arrow keys are currently pressed
+  let leftPressed = false;
+  let rightPressed = false;
+
+  // ----- Sound settings -----
+  let soundEnabled = true; // toggled by the "Sound Effects: On/Off" button
+  let musicEnabled = true; // toggled by the "Music: On/Off" button
+  let audioCtx = null; // created on the player's first interaction (see initAudio)
+
+  // ----- Set up keyboard controls -----
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowLeft') leftPressed = true;
+    if (e.key === 'ArrowRight') rightPressed = true;
+  });
+
+  document.addEventListener('keyup', function (e) {
+    if (e.key === 'ArrowLeft') leftPressed = false;
+    if (e.key === 'ArrowRight') rightPressed = false;
+  });
+
+  // =====================================================================
+  // SOUND EFFECTS (Web Audio API - no audio files needed)
+  //
+  // Every sound is generated on the fly using oscillators (simple tones)
+  // and, for the explosion, a short burst of random noise. Each sound is
+  // kept short and quiet so the game doesn't get annoying.
+  // =====================================================================
+
+  // ----- Create (or resume) the audio context -----
+  // Browsers block audio until the player has interacted with the page
+  // (e.g. clicked "Start Game"), so this is only called from button clicks.
+  function initAudio() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+  }
+
+  // ----- Play a single short tone -----
+  // freq: pitch in Hz, duration: length in seconds, type: waveform shape,
+  // volume: peak loudness (0 to 1), delay: optional seconds before it starts.
+  function playTone(freq, duration, type, volume, delay) {
+    if (!soundEnabled || !audioCtx) return;
+
+    const startTime = audioCtx.currentTime + (delay || 0);
+
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.type = type;
+    oscillator.frequency.value = freq;
+
+    // Quick fade in, then fade out, so tones sound soft instead of clicky
+    gainNode.gain.setValueAtTime(0, startTime);
+    gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    oscillator.start(startTime);
+    oscillator.stop(startTime + duration + 0.02);
+  }
+
+  // ----- Play a short burst of noise (used for the bomb explosion) -----
+  function playNoiseBurst(duration, volume) {
+    if (!soundEnabled || !audioCtx) return;
+
+    const sampleCount = Math.floor(audioCtx.sampleRate * duration);
+    const buffer = audioCtx.createBuffer(1, sampleCount, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    // Fill the buffer with random values to create white noise
+    for (let i = 0; i < sampleCount; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    const noiseSource = audioCtx.createBufferSource();
+    noiseSource.buffer = buffer;
+
+    // A low-pass filter softens the noise so it sounds like a muffled "boom"
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 900;
+
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.setValueAtTime(volume, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+
+    noiseSource.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    noiseSource.start();
+  }
+
+  // 1. Clear catch sound when the basket catches a normal star
+  function playCatchSound() {
+    playTone(880, 0.12, 'triangle', 0.12);
+  }
+
+  // 2. Lower sad/miss sound when a normal star is missed (life lost)
+  function playMissSound() {
+    playTone(220, 0.25, 'sawtooth', 0.08);
+    playTone(160, 0.3, 'sawtooth', 0.07, 0.1);
+  }
+
+  // 3. Bright magical sound when a golden bonus star appears
+  function playBonusAppearSound() {
+    playTone(1046, 0.1, 'sine', 0.05);
+    playTone(1318, 0.1, 'sine', 0.05, 0.08);
+    playTone(1568, 0.15, 'sine', 0.05, 0.16);
+  }
+
+  // 4. Stronger reward sound when a golden bonus star is caught
+  function playBonusCatchSound() {
+    playTone(784, 0.1, 'triangle', 0.14);
+    playTone(988, 0.1, 'triangle', 0.14, 0.07);
+    playTone(1318, 0.18, 'triangle', 0.14, 0.14);
+  }
+
+  // 5. Warning sound when a bomb appears
+  function playBombAppearSound() {
+    playTone(150, 0.2, 'square', 0.05);
+  }
+
+  // 6. Hit/explosion sound when a bomb is caught (life lost)
+  function playExplosionSound() {
+    playNoiseBurst(0.3, 0.18);
+    playTone(80, 0.3, 'sawtooth', 0.1);
+  }
+
+  // 7. Level-up sound (short rising melody)
+  function playLevelUpSound() {
+    playTone(523, 0.1, 'triangle', 0.1);
+    playTone(659, 0.1, 'triangle', 0.1, 0.1);
+    playTone(784, 0.1, 'triangle', 0.1, 0.2);
+    playTone(1046, 0.2, 'triangle', 0.1, 0.3);
+  }
+
+  // 8. Game-over sound (short falling melody)
+  function playGameOverSound() {
+    playTone(392, 0.25, 'sawtooth', 0.09);
+    playTone(330, 0.25, 'sawtooth', 0.09, 0.2);
+    playTone(262, 0.4, 'sawtooth', 0.09, 0.4);
+  }
+
+  // 9. Icy chime sound when an ice star is caught
+  function playIceSound() {
+    playTone(1200, 0.15, 'sine', 0.08);
+    playTone(1500, 0.15, 'sine', 0.06, 0.08);
+  }
+
+  // 10. Low rumble of thunder, played when lightning strikes
+  function playThunderSound() {
+    playNoiseBurst(0.35, 0.14);
+    playTone(60, 0.35, 'sawtooth', 0.09);
+  }
+
+  // =====================================================================
+  // BACKGROUND MUSIC (calm piano melody + gentle waves)
+  //
+  // Two layers are mixed together quietly:
+  //   1. Gentle ocean waves (filtered noise with a slow rise/fall in volume)
+  //   2. A slow, calm piano melody (oscillators with a soft pluck envelope)
+  // Both loop continuously while the music is on.
+  // =====================================================================
+
+  // Holds the audio nodes for the currently playing music (or null if stopped)
+  let musicNodes = null;
+
+  // Creates a buffer of random noise to use as a base for the wave sound
+  function createNoiseBuffer(durationSeconds) {
+    const sampleCount = Math.floor(audioCtx.sampleRate * durationSeconds);
+    const buffer = audioCtx.createBuffer(1, sampleCount, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < sampleCount; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+    return buffer;
+  }
+
+  // ----- Start the looping background music -----
+  function startBackgroundMusic() {
+    // Don't start twice, and don't start without an unlocked audio context
+    if (!audioCtx || musicNodes) return;
+
+    // Overall music volume - kept low so it stays in the background,
+    // but a bit louder than before now that the breeze layer is gone
+    const masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.1;
+    masterGain.connect(audioCtx.destination);
+
+    // ----- Layer 1: gentle ocean waves -----
+    // Low, rumbly filtered noise whose volume slowly rises and falls,
+    // like waves washing in and receding on a beach
+    const waveSource = audioCtx.createBufferSource();
+    waveSource.buffer = createNoiseBuffer(4);
+    waveSource.loop = true;
+
+    const waveFilter = audioCtx.createBiquadFilter();
+    waveFilter.type = 'lowpass';
+    waveFilter.frequency.value = 450; // keeps the waves low and soft
+
+    const waveGain = audioCtx.createGain();
+    waveGain.gain.value = 0.3; // base loudness of the waves
+
+    // A slow oscillator rhythmically swells the wave volume up and down
+    const waveLfo = audioCtx.createOscillator();
+    waveLfo.frequency.value = 0.12; // roughly one wave every 8 seconds
+    const waveLfoGain = audioCtx.createGain();
+    waveLfoGain.gain.value = 0.25; // how much the wave volume swells
+    waveLfo.connect(waveLfoGain);
+    waveLfoGain.connect(waveGain.gain);
+
+    waveSource.connect(waveFilter);
+    waveFilter.connect(waveGain);
+    waveGain.connect(masterGain);
+
+    waveSource.start();
+    waveLfo.start();
+
+    // ----- Layer 2: calm piano melody -----
+    // A short, slow, looping melody played one note at a time using
+    // soft sine-wave "notes" with a gentle pluck-style fade out.
+    const melody = [
+      261.63, // C4
+      329.63, // E4
+      392.00, // G4
+      440.00, // A4
+      392.00, // G4
+      329.63, // E4
+      293.66, // D4
+      246.94  // B3
+    ];
+
+    const pianoState = { stopped: false, noteIndex: 0, timeoutId: null };
+
+    function playNextPianoNote() {
+      if (pianoState.stopped) return;
+
+      const freq = melody[pianoState.noteIndex];
+      pianoState.noteIndex = (pianoState.noteIndex + 1) % melody.length;
+
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const noteGain = audioCtx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+
+      // Gentle pluck: quick fade in, then a slow exponential fade out
+      noteGain.gain.setValueAtTime(0, now);
+      noteGain.gain.linearRampToValueAtTime(0.2, now + 0.08);
+      noteGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.5);
+
+      osc.connect(noteGain);
+      noteGain.connect(masterGain);
+
+      osc.start(now);
+      osc.stop(now + 2.6);
+
+      // Wait before playing the next note, for a slow and calm pace.
+      // Occasionally leave a longer pause for a more natural feel.
+      const isRest = pianoState.noteIndex === 0; // small pause at the end of the phrase
+      const nextDelay = isRest ? 2600 : 1900;
+      pianoState.timeoutId = setTimeout(playNextPianoNote, nextDelay);
+    }
+
+    playNextPianoNote();
+
+    // Keep references so everything can be stopped later
+    musicNodes = {
+      masterGain: masterGain,
+      waveSource: waveSource,
+      waveLfo: waveLfo,
+      pianoState: pianoState
+    };
+  }
+
+  // ----- Stop the background music -----
+  function stopBackgroundMusic() {
+    if (!musicNodes) return;
+
+    musicNodes.waveSource.stop();
+    musicNodes.waveLfo.stop();
+
+    // Stop the piano melody loop from scheduling any more notes
+    musicNodes.pianoState.stopped = true;
+    clearTimeout(musicNodes.pianoState.timeoutId);
+
+    musicNodes = null;
+  }
+
+  // ----- Function to figure out how fast normal stars should fall -----
+  // The speed increases by 1.1x for every 10 points scored.
+  function getStarSpeed() {
+    const speedLevel = Math.floor(score / 10);
+    return baseStarSpeed * Math.pow(1.1, speedLevel);
+  }
+
+  // ----- Function that decides which obstacle a level forces at certain spawns -----
+  // This guarantees players actually see each obstacle type often enough,
+  // instead of relying purely on random chance.
+  function getForcedTypeForLevel(spawnIndex) {
+    if (level === 1 && (spawnIndex === 3 || spawnIndex === 7)) {
+      // Guarantee at least 2 bombs appear during level 1
+      return 'obstacle';
+    }
+    if (level >= 3 && (spawnIndex === 2 || spawnIndex === 6)) {
+      // Guarantee at least 2 ice stars appear from level 3 onward
+      return 'ice';
+    }
+    return null;
+  }
+
+  // ----- Function to create a new falling object at a random x position -----
+  // The object can be a normal star, a golden bonus star, a dark bomb, or
+  // (from level 3) an ice star.
+  function createStar() {
+    spawnIndexInLevel++;
+
+    // Level 2+: wind gusts happen a couple of times per level
+    if (level >= 2 && (spawnIndexInLevel === 2 || spawnIndexInLevel === 6)) {
+      startWindGust();
+    }
+
+    // Level 4+: lightning strikes happen a couple of times per level
+    if (level >= 4 && (spawnIndexInLevel === 4 || spawnIndexInLevel === 8)) {
+      startLightning();
+    }
+
+    // Decide whether this object should be a golden bonus star
+    starsUntilBonus--;
+    let type = 'normal';
+
+    const forced = getForcedTypeForLevel(spawnIndexInLevel);
+
+    if (forced) {
+      // A level-specific obstacle takes priority, so it is guaranteed to appear
+      type = forced;
+    } else if (starsUntilBonus <= 0) {
+      type = 'bonus';
+      // Pick a new random gap (4 or 5 stars) until the next bonus star
+      starsUntilBonus = 4 + Math.floor(Math.random() * 2);
+    } else {
+      const roll = Math.random();
+      if (roll < 0.2) {
+        // 20% chance for a non-bonus spawn to be a dark bomb
+        type = 'obstacle';
+      } else if (level >= 3 && roll < 0.32) {
+        // From level 3, there's also a smaller chance for an ice star
+        type = 'ice';
+      }
+    }
+
+    let size = starSize;
+    if (type === 'bonus') size = bonusStarSize;
+    if (type === 'obstacle') size = obstacleSize;
+    if (type === 'ice') size = iceStarSize;
+
+    const x = Math.random() * (canvas.width - size);
+    stars.push({ x: x, y: -size, type: type, size: size });
+
+    // Play an "appear" sound only for special/important spawns.
+    // Normal white stars are common, so they stay silent to avoid annoyance.
+    if (type === 'bonus') {
+      playBonusAppearSound();
+    } else if (type === 'obstacle') {
+      playBombAppearSound();
+    } else if (type === 'ice') {
+      // Show the "Ice Star!" notification the first time one appears
+      if (!iceIntroduced) {
+        showNotification('Ice Star!');
+        iceIntroduced = true;
+      }
+    }
+  }
+
+  // ----- Function to draw the night-sky background -----
+  function setupBackgroundStars() {
+    bgStars = [];
+    for (let i = 0; i < 60; i++) {
+      bgStars.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        radius: Math.random() * 1.5 + 0.5,
+        twinkleSpeed: Math.random() * 0.05 + 0.02,
+        twinklePhase: Math.random() * Math.PI * 2
+      });
+    }
+  }
+
+  function drawBackground() {
+    // Dark night-sky gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#0d1333');
+    gradient.addColorStop(1, '#1b2147');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Moon in the top-right corner
+    ctx.fillStyle = '#f5f3ce';
+    ctx.beginPath();
+    ctx.arc(canvas.width - 50, 50, 25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Small twinkling stars in the background
+    bgTime++;
+    for (let i = 0; i < bgStars.length; i++) {
+      const s = bgStars[i];
+      const opacity = 0.4 + 0.6 * Math.abs(Math.sin(bgTime * s.twinkleSpeed + s.twinklePhase));
+      ctx.fillStyle = 'rgba(255, 255, 255, ' + opacity + ')';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ----- Function to draw the basket so it looks like a real basket -----
+  function drawBasket() {
+    const baseY = canvas.height - 10; // bottom edge of the basket
+    const topY = baseY - basketHeight; // top edge of the basket (collision line)
+    const bottomInset = basketWidth * 0.12; // makes the basket narrower at the bottom
+
+    const topLeft = basketX;
+    const topRight = basketX + basketWidth;
+    const bottomLeft = basketX + bottomInset;
+    const bottomRight = basketX + basketWidth - bottomInset;
+
+    // Basket body (a trapezoid shape, wider at the top) with a wood-style gradient
+    const basketGradient = ctx.createLinearGradient(0, topY, 0, baseY);
+    basketGradient.addColorStop(0, '#d99a51');
+    basketGradient.addColorStop(1, '#8a5323');
+    ctx.fillStyle = basketGradient;
+    ctx.beginPath();
+    ctx.moveTo(topLeft, topY);
+    ctx.lineTo(topRight, topY);
+    ctx.lineTo(bottomRight, baseY);
+    ctx.lineTo(bottomLeft, baseY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Woven lines across the basket for texture
+    ctx.strokeStyle = '#7a4321';
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 3; i++) {
+      const t = i / 4;
+      const y = topY + basketHeight * t;
+      const leftX = topLeft + (bottomLeft - topLeft) * t;
+      const rightX = topRight + (bottomRight - topRight) * t;
+      ctx.beginPath();
+      ctx.moveTo(leftX, y);
+      ctx.lineTo(rightX, y);
+      ctx.stroke();
+    }
+
+    // Thicker rim along the top edge of the basket
+    ctx.strokeStyle = '#5c3210';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(topLeft, topY);
+    ctx.lineTo(topRight, topY);
+    ctx.stroke();
+
+    // Small curved handles on each side, near the rim
+    ctx.strokeStyle = '#5c3210';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(topLeft, topY, 6, Math.PI * 0.5, Math.PI * 1.5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(topRight, topY, 6, -Math.PI * 0.5, Math.PI * 0.5);
+    ctx.stroke();
+
+    // If the basket is "frozen" from an ice star, draw a light blue
+    // overlay on top of it so the player can see the effect is active
+    if (iceEffectTimer > 0) {
+      ctx.fillStyle = 'rgba(150, 220, 255, 0.35)';
+      ctx.beginPath();
+      ctx.moveTo(topLeft, topY);
+      ctx.lineTo(topRight, topY);
+      ctx.lineTo(bottomRight, baseY);
+      ctx.lineTo(bottomLeft, baseY);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // ----- Function to draw a single 5-pointed star shape -----
+  // Adds a soft glow and a bright outline so stars stand out against the night sky.
+  function drawStarShape(cx, cy, outerRadius, innerRadius, color) {
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12; // glow effect around the star
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const radius = (i % 2 === 0) ? outerRadius : innerRadius;
+      const angle = (Math.PI / 5) * i - Math.PI / 2; // start pointing up
+      const x = cx + radius * Math.cos(angle);
+      const y = cy + radius * Math.sin(angle);
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // Bright outline so the star is visible even on light backgrounds (e.g. clouds)
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // ----- Function to draw an ice star (level 3+ obstacle) -----
+  // Drawn as an icy-blue star with a thin frosty ring around it so it
+  // is clearly different from normal and bonus stars.
+  function drawIceStar(cx, cy, outerRadius, innerRadius) {
+    drawStarShape(cx, cy, outerRadius, innerRadius, '#bdf2ff');
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(220, 250, 255, 0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerRadius + 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ----- Function to draw a falling obstacle as a classic black bomb -----
+  // Drawn clearly different from the stars: round black body, a curved
+  // fuse on top, and a glowing spark at the tip of the fuse.
+  function drawObstacle(cx, cy, radius) {
+    ctx.save();
+
+    // Faint red glow around the bomb to signal danger
+    ctx.shadowColor = 'rgba(255, 60, 60, 0.6)';
+    ctx.shadowBlur = 10;
+
+    // Round black bomb body
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Turn off the glow for the smaller details
+    ctx.shadowBlur = 0;
+
+    // A soft highlight near the top-left so the bomb looks round/shiny
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+    ctx.beginPath();
+    ctx.arc(cx - radius * 0.35, cy - radius * 0.35, radius * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Dark outline around the bomb body
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Curvy fuse sticking out of the top of the bomb
+    const fuseBaseX = cx;
+    const fuseBaseY = cy - radius;
+    const fuseTipX = cx + radius * 0.6;
+    const fuseTipY = cy - radius * 1.7;
+    ctx.strokeStyle = '#a0703a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(fuseBaseX, fuseBaseY);
+    ctx.quadraticCurveTo(cx + radius * 0.8, cy - radius * 1.1, fuseTipX, fuseTipY);
+    ctx.stroke();
+
+    // Glowing spark at the very tip of the fuse
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.arc(fuseTipX, fuseTipY, radius * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff5500';
+    ctx.beginPath();
+    ctx.arc(fuseTipX, fuseTipY, radius * 0.11, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ----- Function to start the explosion animation when a bomb is caught -----
+  function triggerExplosion(cx, cy) {
+    const particles = [];
+    const particleCount = 18;
+
+    // Create particles that fly outward in all directions from the hit point
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (Math.PI * 2 / particleCount) * i;
+      const speed = 1.5 + Math.random() * 2.5;
+      particles.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        radius: 2 + Math.random() * 3,
+        // Mix of orange/red/yellow colors for a fiery look
+        color: ['#ff4500', '#ff8800', '#ffcc00'][Math.floor(Math.random() * 3)]
+      });
+    }
+
+    explosion = { x: cx, y: cy, timer: 0, particles: particles };
+  }
+
+  // ----- Function to move the explosion particles forward each frame -----
+  function updateExplosion() {
+    if (!explosion) return;
+
+    explosion.timer++;
+
+    for (let i = 0; i < explosion.particles.length; i++) {
+      const p = explosion.particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.1; // slight gravity pulls particles down
+    }
+
+    // Remove the explosion once its animation has finished
+    if (explosion.timer >= EXPLOSION_DURATION) {
+      explosion = null;
+    }
+  }
+
+  // ----- Function to draw the explosion flash, particles and smoke -----
+  function drawExplosion() {
+    if (!explosion) return;
+
+    const progress = explosion.timer / EXPLOSION_DURATION;
+
+    // Quick bright flash that fades out over the first few frames
+    if (explosion.timer < 8) {
+      const flashOpacity = 0.5 * (1 - explosion.timer / 8);
+      ctx.fillStyle = 'rgba(255, 200, 120, ' + flashOpacity + ')';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // Smoke puff that grows and fades over the explosion's lifetime
+    ctx.fillStyle = 'rgba(120, 120, 120, ' + (0.35 * (1 - progress)) + ')';
+    ctx.beginPath();
+    ctx.arc(explosion.x, explosion.y - progress * 12, 14 + progress * 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Fiery particles flying outward, fading out as they go
+    for (let i = 0; i < explosion.particles.length; i++) {
+      const p = explosion.particles[i];
+      ctx.globalAlpha = 1 - progress;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1; // reset transparency for everything drawn after this
+  }
+
+  // ----- Function to get a small random shake offset for the basket -----
+  // Only shakes during the first part of the explosion animation.
+  function getBasketShake() {
+    if (explosion && explosion.timer < SHAKE_DURATION) {
+      return (Math.random() - 0.5) * 8; // random value between -4 and 4
+    }
+    return 0;
+  }
+
+  // ----- Function to draw all the falling stars and obstacles -----
+  function drawStars() {
+    for (let i = 0; i < stars.length; i++) {
+      const star = stars[i];
+      const cx = star.x + star.size / 2;
+      const cy = star.y + star.size / 2;
+
+      if (star.type === 'obstacle') {
+        drawObstacle(cx, cy, star.size / 2);
+      } else if (star.type === 'ice') {
+        const outerRadius = star.size / 2;
+        const innerRadius = star.size / 4;
+        drawIceStar(cx, cy, outerRadius, innerRadius);
+      } else {
+        const outerRadius = star.size / 2;
+        const innerRadius = star.size / 4;
+        const color = (star.type === 'bonus') ? '#ffd700' : '#fffbe6';
+        drawStarShape(cx, cy, outerRadius, innerRadius, color);
+      }
+    }
+  }
+
+  // ----- Cloud functions (clouds are present from level 1 onward) -----
+  function setupClouds() {
+    // Level 1 starts with two clouds drifting slowly across the sky
+    clouds = [
+      { x: 60, y: 70, size: 90, speed: 0.3 },
+      { x: 320, y: 130, size: 110, speed: 0.2 }
+    ];
+  }
+
+  // Called once when the player reaches level 2 - adds more clouds
+  // so the sky becomes busier and harder to see through
+  function addMoreClouds() {
+    clouds.push({ x: -80, y: 220, size: 80, speed: 0.25 });
+    clouds.push({ x: 450, y: 60, size: 95, speed: 0.22 });
+  }
+
+  function updateClouds() {
+    // While a wind gust is blowing, clouds drift noticeably faster
+    const speedMultiplier = (windTimer > 0) ? 1.8 : 1;
+
+    for (let i = 0; i < clouds.length; i++) {
+      clouds[i].x += clouds[i].speed * speedMultiplier;
+
+      // When a cloud drifts off the right edge, send it back to the left
+      if (clouds[i].x > canvas.width + clouds[i].size) {
+        clouds[i].x = -clouds[i].size;
+      }
+    }
+  }
+
+  // Draws a simple cloud shape made of overlapping circles
+  function drawCloudShape(x, y, size) {
+    const r = size / 4;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.arc(x + r * 1.2, y - r * 0.6, r * 1.3, 0, Math.PI * 2);
+    ctx.arc(x + r * 2.4, y, r, 0, Math.PI * 2);
+    ctx.arc(x + r * 1.2, y + r * 0.4, r * 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawClouds() {
+    // Kept fairly transparent so falling stars stay visible through the clouds
+    ctx.fillStyle = 'rgba(220, 220, 235, 0.3)';
+    for (let i = 0; i < clouds.length; i++) {
+      drawCloudShape(clouds[i].x, clouds[i].y, clouds[i].size);
+    }
+  }
+
+  // ----- Wind functions (level 2+) -----
+  // Starts a gust of wind that pushes falling stars (and slightly the
+  // basket) sideways for a short time.
+  function startWindGust() {
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    windForce = direction * (0.8 + Math.random() * 0.7); // sideways push per frame
+    windTimer = WIND_GUST_DURATION;
+
+    if (!windIntroduced) {
+      showNotification('Wind!');
+      windIntroduced = true;
+    }
+  }
+
+  // Counts down the current wind gust, frame by frame
+  function updateWind() {
+    if (windTimer > 0) {
+      windTimer--;
+      if (windTimer === 0) {
+        windForce = 0;
+      }
+    }
+  }
+
+  // Draws a few simple streak lines across the screen while wind is blowing,
+  // so the player can see that wind is currently affecting the game
+  function drawWindEffect() {
+    if (windTimer <= 0) return;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+      const y = (i * 90 + bgTime * 2) % canvas.height;
+      const x = (windForce > 0) ? 0 : canvas.width;
+      const dx = (windForce > 0) ? 35 : -35;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + dx, y - 6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // ----- Lightning functions (level 4+) -----
+  // Starts a lightning strike at a random x position. The strike has a
+  // short "warning" flicker, then a bright bolt that can hit the basket.
+  function startLightning() {
+    lightning = { x: Math.random() * canvas.width, timer: 0 };
+
+    if (!lightningIntroduced) {
+      showNotification('Lightning!');
+      lightningIntroduced = true;
+    }
+  }
+
+  // Advances the lightning animation and checks whether it strikes the basket
+  function updateLightning() {
+    if (!lightning) return;
+
+    lightning.timer++;
+
+    // The moment the bolt actually strikes the ground
+    if (lightning.timer === LIGHTNING_STRIKE_FRAME) {
+      playThunderSound();
+
+      // If the basket is under the strike point, the player loses a life
+      if (lightning.x >= basketX && lightning.x <= basketX + basketWidth) {
+        lives--;
+        showLifeLostAnimation();
+        if (lives <= 0) {
+          gameOver = true;
+        }
+      }
+    }
+
+    // Remove the lightning once its animation has finished
+    if (lightning.timer >= LIGHTNING_TOTAL_FRAMES) {
+      lightning = null;
+    }
+  }
+
+  // Draws the lightning warning flicker and the strike itself
+  function drawLightning() {
+    if (!lightning) return;
+
+    const t = lightning.timer;
+
+    if (t < LIGHTNING_STRIKE_FRAME) {
+      // Warning phase: a faint flickering dashed line shows where the strike will land
+      if (t % 4 < 2) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(180, 220, 255, 0.4)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 6]);
+        ctx.beginPath();
+        ctx.moveTo(lightning.x, 0);
+        ctx.lineTo(lightning.x, canvas.height);
+        ctx.stroke();
+        ctx.restore();
+      }
+    } else if (t < LIGHTNING_STRIKE_FRAME + 6) {
+      // Strike phase: a bright flash and a jagged bolt of light
+      ctx.save();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = '#ffffff';
+      ctx.shadowColor = '#aee9ff';
+      ctx.shadowBlur = 15;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      let x = lightning.x;
+      ctx.moveTo(x, 0);
+      for (let y = 30; y < canvas.height; y += 30) {
+        x += (Math.random() - 0.5) * 25;
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // ----- Function to move the basket based on key presses -----
+  function moveBasket() {
+    // While "frozen" by an ice star, the basket moves at half speed
+    let speed = basketSpeed;
+    if (iceEffectTimer > 0) {
+      speed *= 0.5;
+    }
+
+    if (leftPressed) {
+      basketX -= speed;
+    }
+    if (rightPressed) {
+      basketX += speed;
+    }
+
+    // A wind gust slightly pushes the basket sideways too, making it
+    // a little harder to control
+    if (windTimer > 0) {
+      basketX += windForce * 0.4;
+    }
+
+    // Keep the basket inside the canvas
+    if (basketX < 0) basketX = 0;
+    if (basketX + basketWidth > canvas.width) basketX = canvas.width - basketWidth;
+  }
+
+  // ----- Function to move stars down and check for catches/misses -----
+  function updateStars() {
+    const basketY = canvas.height - basketHeight - 10;
+    const normalSpeed = getStarSpeed();
+
+    for (let i = 0; i < stars.length; i++) {
+      const star = stars[i];
+
+      // Golden bonus stars fall 1.3x faster than normal stars and obstacles
+      star.y += (star.type === 'bonus') ? normalSpeed * 1.3 : normalSpeed;
+
+      // A wind gust pushes every falling object sideways a little
+      if (windTimer > 0) {
+        star.x += windForce;
+        if (star.x < 0) star.x = 0;
+        if (star.x + star.size > canvas.width) star.x = canvas.width - star.size;
+      }
+
+      // Check if the object has reached the basket's height
+      if (star.y + star.size >= basketY) {
+        const starCenterX = star.x + star.size / 2;
+
+        // Check if the object's x position is within the basket's range
+        if (starCenterX >= basketX && starCenterX <= basketX + basketWidth) {
+          if (star.type === 'bonus') {
+            // Golden bonus star caught: +3 points
+            score += 3;
+            playBonusCatchSound();
+          } else if (star.type === 'ice') {
+            // Ice star caught: no points, but the basket is "frozen"
+            // (moves more slowly) for a short time
+            iceEffectTimer = ICE_SLOW_DURATION;
+            playIceSound();
+          } else if (star.type === 'obstacle') {
+            // Bomb caught: lose a life and trigger the explosion animation.
+            // The game keeps running - it only ends if lives reach 0.
+            lives--;
+            showLifeLostAnimation();
+            triggerExplosion(starCenterX, star.y + star.size / 2);
+            playExplosionSound();
+          } else {
+            // Normal star caught: +1 point
+            score += 1;
+            playCatchSound();
+          }
+
+          stars.splice(i, 1);
+          i--;
+          continue;
+        }
+      }
+
+      // Check if the object has fallen past the bottom of the canvas
+      if (star.y > canvas.height) {
+        // Only missed normal stars cost a life.
+        // Bonus stars and obstacles are simply removed with no penalty.
+        if (star.type === 'normal') {
+          lives--;
+          showLifeLostAnimation();
+          playMissSound();
+        }
+        stars.splice(i, 1);
+        i--;
+      }
+    }
+
+    // Check if the player has run out of lives
+    if (lives <= 0) {
+      gameOver = true;
+    }
+  }
+
+  // ----- Function to update the level based on the current score -----
+  function updateLevel() {
+    // Player gains one level for every 10 points scored
+    level = Math.floor(score / 10) + 1;
+    levelValueDisplay.textContent = level;
+
+    // Show the big "Level X" animation and play a sound whenever the player reaches a new level
+    if (level > previousLevel) {
+      showLevelUpAnimation(level);
+      playLevelUpSound();
+      previousLevel = level;
+
+      // Reset the per-level spawn counter so each new level gets its own
+      // guaranteed obstacle appearances (bombs, ice stars, wind, lightning)
+      spawnIndexInLevel = 0;
+
+      // Once the player reaches level 2, add extra clouds to the sky
+      if (level === 2 && !extraCloudsAdded) {
+        addMoreClouds();
+        extraCloudsAdded = true;
+      }
+    }
+  }
+
+  // ----- Function to update the score/lives text -----
+  function updateInfo() {
+    scoreDisplay.textContent = 'Score: ' + score;
+    livesDisplay.textContent = 'Lives: ' + lives;
+  }
+
+  // ----- Function to show the "-1" fade in/out animation -----
+  function showLifeLostAnimation() {
+    // Remove the animation class first, in case it's still showing,
+    // so the animation can be restarted from the beginning.
+    lifeLostIndicator.classList.remove('show-anim');
+
+    // Force the browser to apply the removal before re-adding the class
+    // (this trick lets the animation replay every time a life is lost).
+    void lifeLostIndicator.offsetWidth;
+
+    lifeLostIndicator.classList.add('show-anim');
+  }
+
+  // ----- Function to show the big "Level X" animation in the center -----
+  function showLevelUpAnimation(newLevel) {
+    levelUpMessage.textContent = 'Level ' + newLevel + '!';
+
+    // Same restart trick as the "-1" indicator, so the animation
+    // can replay every time the player levels up.
+    levelUpMessage.classList.remove('show-anim');
+    void levelUpMessage.offsetWidth;
+    levelUpMessage.classList.add('show-anim');
+  }
+
+  // ----- Function to show a short notification banner near the top -----
+  // Used the first time a new obstacle type appears (e.g. "Wind!", "Ice Star!", "Lightning!")
+  function showNotification(text) {
+    notificationMessage.textContent = text;
+
+    // Same restart trick as the other animations, so it can replay
+    notificationMessage.classList.remove('show-anim');
+    void notificationMessage.offsetWidth;
+    notificationMessage.classList.add('show-anim');
+  }
+
+  // ----- Main game loop, runs many times per second -----
+  let starTimer = 0;
+
+  function gameLoop() {
+    // Stop the loop once the game is over AND the explosion (if any) has finished,
+    // so a bomb hit that empties the last life still gets to show its animation.
+    if (gameOver && !explosion) {
+      showGameOverScreen();
+      return;
+    }
+
+    // If paused, just wait and check again on the next frame
+    if (isPaused) {
+      requestAnimationFrame(gameLoop);
+      return;
+    }
+
+    // Draw the night-sky background first, so everything else is on top
+    drawBackground();
+
+    // Only keep moving/spawning things while the game is still in progress
+    if (!gameOver) {
+      moveBasket();
+      updateStars();
+      updateLevel();
+      updateClouds();
+      updateWind();
+      updateLightning();
+
+      // Count down the "frozen basket" effect from catching an ice star
+      if (iceEffectTimer > 0) {
+        iceEffectTimer--;
+      }
+
+      // Create a new star every so often
+      starTimer++;
+      if (starTimer > 60) { // roughly every 1 second (60 frames)
+        createStar();
+        starTimer = 0;
+      }
+    }
+
+    // Advance the explosion animation (does nothing if no bomb was hit)
+    updateExplosion();
+
+    // Clouds are drawn before the stars (and made semi-transparent) so they
+    // add atmosphere without hiding the falling stars too much
+    drawClouds();
+
+    // Draw the basket with a small shake offset while a bomb is exploding
+    ctx.save();
+    ctx.translate(getBasketShake(), 0);
+    drawBasket();
+    ctx.restore();
+
+    drawStars();
+
+    // Draw wind streaks and lightning on top of the stars and basket
+    drawWindEffect();
+    drawLightning();
+
+    // Draw the explosion flash/particles/smoke on top of everything else
+    drawExplosion();
+
+    updateInfo();
+
+    // Repeat the loop on the next animation frame
+    requestAnimationFrame(gameLoop);
+  }
+
+  // ----- Function to show the game over screen -----
+  function showGameOverScreen() {
+    finalScoreText.textContent = 'Your final score: ' + score;
+    gameOverScreen.style.display = 'flex';
+    pauseBtn.disabled = true;
+    playGameOverSound();
+  }
+
+  // ----- Function to reset everything and start a new game -----
+  function startGame() {
+    basketX = canvas.width / 2 - basketWidth / 2;
+    stars = [];
+    score = 0;
+    lives = 3;
+    level = 1;
+    previousLevel = 1;
+    gameOver = false;
+    isPaused = false;
+    starTimer = 0;
+    starsUntilBonus = 4 + Math.floor(Math.random() * 2);
+    explosion = null; // clear any leftover explosion from a previous game
+
+    // Reset obstacle/level-progression state
+    spawnIndexInLevel = 0;
+    iceEffectTimer = 0;
+    windForce = 0;
+    windTimer = 0;
+    lightning = null;
+    windIntroduced = false;
+    iceIntroduced = false;
+    lightningIntroduced = false;
+    notificationMessage.classList.remove('show-anim');
+
+    // Reset background decorations - clouds are present from level 1
+    setupClouds();
+    extraCloudsAdded = false;
+    levelValueDisplay.textContent = level;
+
+    // Hide all overlay screens and show normal controls
+    startScreen.style.display = 'none';
+    gameOverScreen.style.display = 'none';
+    pauseScreen.style.display = 'none';
+    levelUpMessage.classList.remove('show-anim');
+    pauseBtn.disabled = false;
+    pauseBtn.textContent = 'Pause';
+
+    updateInfo();
+    gameLoop();
+  }
+
+  // ----- Button click handlers -----
+
+  // "Start Game" on the start screen begins the game
+  startBtn.addEventListener('click', function () {
+    // Create/unlock the audio context here, since this is the player's
+    // first interaction with the page (browsers block audio before this).
+    initAudio();
+
+    // Start the background ambience now that audio is unlocked
+    if (musicEnabled) {
+      startBackgroundMusic();
+    }
+
+    gameStarted = true;
+    startGame();
+  });
+
+  // "Sound Effects: On/Off" toggles the short event sounds (catch, miss, etc.)
+  soundBtn.addEventListener('click', function () {
+    // Also make sure audio is unlocked in case this is clicked first
+    initAudio();
+    soundEnabled = !soundEnabled;
+    soundBtn.textContent = soundEnabled ? 'Sound Effects: On' : 'Sound Effects: Off';
+  });
+
+  // "Music: On/Off" toggles the looping background ambience
+  musicBtn.addEventListener('click', function () {
+    initAudio();
+    musicEnabled = !musicEnabled;
+    musicBtn.textContent = musicEnabled ? 'Music: On' : 'Music: Off';
+
+    if (musicEnabled) {
+      startBackgroundMusic();
+    } else {
+      stopBackgroundMusic();
+    }
+  });
+
+  // "Pause" / "Resume" toggles the paused state
+  pauseBtn.addEventListener('click', function () {
+    // Pausing only makes sense once the game has started and isn't over
+    if (!gameStarted || gameOver) return;
+
+    isPaused = !isPaused;
+    pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+
+    // Show or hide the "Game is paused" message in the middle of the screen
+    pauseScreen.style.display = isPaused ? 'flex' : 'none';
+  });
+
+  // "Restart" (during play) and "Restart Game" (on game over screen)
+  // both reset the game back to a fresh start
+  restartBtn.addEventListener('click', startGame);
+  gameOverRestartBtn.addEventListener('click', startGame);
+
+  // ----- Initial setup -----
+  // Show the start screen and wait for the player to click "Start Game"
+  basketX = canvas.width / 2 - basketWidth / 2;
+  setupBackgroundStars();
+  drawBackground();
+  drawBasket();
+  updateInfo();
+</script>
+
+</body>
+</html>
