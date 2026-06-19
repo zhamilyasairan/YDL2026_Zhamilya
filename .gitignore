@@ -9,3 +9,5 @@ day2/games.csv
 # Jupyter checkpoints
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
+*.pyc
+.streamlit/secrets.toml
