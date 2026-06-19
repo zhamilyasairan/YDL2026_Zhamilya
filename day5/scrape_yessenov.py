@@ -1,14 +1,14 @@
 """
 scrape_yessenov.py
 ==================
-Scraper for https://yessenovfoundation.org/en/
-Goal: Collect detailed text data from all key pages for a Streamlit chatbot.
+Scraper for https://yessenovfoundation.org/ — English, Russian, Kazakh.
 
-How it works:
-1. Starts from a curated list of priority URLs (programs, about, news, stories)
-2. Also crawls the site to discover more pages automatically
-3. Cleans each page (removes menus, footers, scripts)
-4. Saves results to data/yessenov_pages.json and data/yessenov_text.txt
+Outputs:
+  data/yessenov_en.txt      ← English pages
+  data/yessenov_ru.txt      ← Russian pages
+  data/yessenov_kk.txt      ← Kazakh pages
+  data/yessenov_pages.json  ← all pages: {title, url, lang, lang_label, text}
+  data/yessenov_text.txt    ← combined text (all languages)
 
 Run:  python scrape_yessenov.py
 Requirements: pip install requests beautifulsoup4
@@ -23,25 +23,40 @@ from urllib.parse import urljoin, urlparse
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
-BASE_URL = "https://yessenovfoundation.org/en/"
-DOMAIN   = "yessenovfoundation.org"
+DOMAIN          = "yessenovfoundation.org"
+DELAY_SECONDS   = 1.5
+MAX_CRAWL_PAGES = 80    # limit for auto-discovered pages per language
+OUTPUT_DIR      = "data"
 
-# Delay between requests (be polite to the server)
-DELAY_SECONDS = 1.5
+LANGUAGES = [
+    {"code": "en", "label": "English",  "prefix": "/en/"},
+    {"code": "ru", "label": "Русский",  "prefix": "/ru/"},
+    {"code": "kk", "label": "Қазақша", "prefix": "/kk/"},
+]
 
-# Maximum pages to scrape total (crawled pages; priority list is always included)
-MAX_CRAWL_PAGES = 60
+# ─── ACTIVE PROGRAM SLUGS ────────────────────────────────────────────────────
+# URLs containing any of these slugs are treated as priority regardless of the
+# crawl-page cap. This ensures detailed program pages are never skipped.
 
-# Where to save results
-OUTPUT_DIR  = "data"
-JSON_FILE   = os.path.join(OUTPUT_DIR, "yessenov_pages.json")
-TEXT_FILE   = os.path.join(OUTPUT_DIR, "yessenov_text.txt")
+ACTIVE_PROGRAM_SLUGS = [
+    "research-internships",
+    "programma-nauchnyh-stazhirovok",   # Russian slug for detailed RI pages
+    "yessenov-scholarship",
+    "stipendiya-im-akademika",          # Russian slug for scholarship editions
+    "english-language-program",
+    "yessenov-data-lab",
+    "yessenov-launch-pad",
+]
 
-# ─── PRIORITY URLS ───────────────────────────────────────────────────────────
-# These are always scraped first and in full, regardless of crawl limit.
-# Covers every tab/section from the site map.
 
-PRIORITY_URLS = [
+def is_active_program_url(url: str) -> bool:
+    return any(slug in url for slug in ACTIVE_PROGRAM_SLUGS)
+
+
+# ─── PRIORITY URL TEMPLATES ──────────────────────────────────────────────────
+# Written in /en/ — replaced automatically to /ru/ and /kk/.
+
+_PRIORITY_EN = [
     # ── About ──
     "https://yessenovfoundation.org/en/about-us/mission-and-reports/",
     "https://yessenovfoundation.org/en/about-us/galimzhan-yessenov/",
@@ -52,324 +67,285 @@ PRIORITY_URLS = [
     # ── S. Yessenov ──
     "https://yessenovfoundation.org/en/sh-esenov/biografiya/",
     "https://yessenovfoundation.org/en/sh-esenov/publikatsii-v-smi/",
-    "https://yessenovfoundation.org/en/sh-esenov/multimedia/",
 
-    # ── Active Programs ──
+    # ── Active Programs (overview pages) ──
     "https://yessenovfoundation.org/en/about-us/programs/science/research-internships/",
     "https://yessenovfoundation.org/en/about-us/programs/science/yessenov-scholarship/",
     "https://yessenovfoundation.org/en/about-us/programs/knowledge/english-language-program/",
     "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/",
-    "https://yessenovfoundation.org/en/about-us/programs/knowledge/yessenov-lectures/find-your-way/",
     "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-launch-pad/",
 
-    # ── YDL editions ──
-    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/yessenov-data-lab-2026/",
-    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/yessenov-data-lab-2025/",
-    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/yessenov-data-lab-2024/",
-    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/ydl-2023/",
-    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/ydl-2020/",
-    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/ydl-2019/",
-    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/ydl-2018/",
+    # ── Research Internships — detailed pages with application requirements ──
+    "https://yessenovfoundation.org/en/about-us/programs/science/research-internships/programma-nauchnyh-stazhirovok-v-laboratoriyah-mira-2026/",
+    "https://yessenovfoundation.org/en/about-us/programs/science/research-internships/programma-nauchnyh-stazhirovok-v-laboratoriyah-mira-2025/",
+    "https://yessenovfoundation.org/en/about-us/programs/science/research-internships/ri-2024/",
+    "https://yessenovfoundation.org/en/about-us/programs/science/research-internships/ri-2023/",
 
-    # ── Scholarship editions ──
+    # ── Yessenov Scholarship — recent editions ──
     "https://yessenovfoundation.org/en/about-us/programs/science/yessenov-scholarship/%d2%9baz-stipendiya-im-akademika-sh-esenova-2026/",
     "https://yessenovfoundation.org/en/about-us/programs/science/yessenov-scholarship/stipendiya-im-akademika-sh-esenova-2025/",
     "https://yessenovfoundation.org/en/about-us/programs/science/yessenov-scholarship/stipendiya-im-akademika-sh-esenova-2024/",
     "https://yessenovfoundation.org/en/about-us/programs/science/yessenov-scholarship/shakhmardan-yessenov-scholarship-2023/",
 
-    # ── Archive Programs (2013–2024) ──
-    "https://yessenovfoundation.org/en/about-us/programs/science/orleu/",
-    "https://yessenovfoundation.org/en/about-us/programs/knowledge/chess/",
-    "https://yessenovfoundation.org/en/about-us/programs/knowledge/books/scientific-conferences/",
-    "https://yessenovfoundation.org/en/about-us/programs/science/travel-grants/",
-    "https://yessenovfoundation.org/en/about-us/programs/science/graduate-studies/",
-    "https://yessenovfoundation.org/en/about-us/programs/knowledge/yessenov-lectures/yessenov-lectures/",
-    "https://yessenovfoundation.org/en/about-us/programs/resources/internships-in-it-startups/",
-    "https://yessenovfoundation.org/en/about-us/programs/knowledge/books/",
+    # ── Yessenov Data Lab — recent editions ──
+    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/yessenov-data-lab-2026/",
+    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/yessenov-data-lab-2025/",
+    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-data-lab/yessenov-data-lab-2024/",
 
-    # ── Partner Programs ──
-    "https://yessenovfoundation.org/en/about-us/programs/resources/almaty-marathon/",
+    # ── Yessenov Launch Pad — recent editions ──
+    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-launch-pad/eng-yessenov-launch-pad-2025/",
+    "https://yessenovfoundation.org/en/about-us/programs/resources/yessenov-launch-pad/yessenov-launch-pad-2023/",
+
+    # ── English Language Program — recent editions ──
+    "https://yessenovfoundation.org/en/about-us/programs/knowledge/english-language-program/grant-dlya-universitetov-obuchenie-anglijskomu-yazyku-studentov-i-prepodavatelej-2024-2025/",
+    "https://yessenovfoundation.org/en/about-us/programs/knowledge/english-language-program/2022-2023/",
 
     # ── News & Stories ──
     "https://yessenovfoundation.org/en/category/novosti/novosti-fonda/",
     "https://yessenovfoundation.org/en/category/novosti/istorii-uspeha/",
-
-    # ── Recent News Posts ──
     "https://yessenovfoundation.org/en/i-ih-ostalos-92/",
     "https://yessenovfoundation.org/en/kakoj-budet-ydl-2026/",
-    "https://yessenovfoundation.org/en/naczionalnyj-otbor-na-ieso-2026-zavershyon/",
-
-    # ── Success Stories ──
     "https://yessenovfoundation.org/en/andrej-kim/",
     "https://yessenovfoundation.org/en/dimash-davletov/",
-    "https://yessenovfoundation.org/en/aliya-zhadyranova/",
-    "https://yessenovfoundation.org/en/ernar-sakenov/",
 ]
 
-# ─── TEXT CLEANING ────────────────────────────────────────────────────────────
+# Extra URLs that have NO language prefix in the path (e.g. legacy redirects).
+# Scraped once under Russian since that's what the site typically serves at /.
+EXTRA_URLS_RU = [
+    "https://yessenovfoundation.org/about-us/programs/science/research-internships/programma-nauchnyh-stazhirovok-v-laboratoriyah-mira-2026/",
+]
 
-# Repeated footer/menu lines to remove (exact matches after strip)
+
+def priority_urls_for(lang_prefix: str) -> list[str]:
+    return [u.replace("/en/", lang_prefix) for u in _PRIORITY_EN]
+
+
+# ─── BOILERPLATE LINES ───────────────────────────────────────────────────────
+
 BOILERPLATE_LINES = {
     "our mission: to develop kazakhstan's intellectual potential",
-    "stay in touch",
-    "bookshelf",
-    "menu",
-    "қаз",
-    "рус",
-    "eng",
+    "stay in touch", "bookshelf", "menu",
     "1st floor, 7/75 shevchenko street, almaty, kazakhstan",
-    "+7 (771) 759-59-44",
-    "info@yessenovfoundation.org",
-    "mission and reports",
-    "founder",
-    "programs",
-    "the board of trustees",
-    "the expert board",
-    "biography",
-    "publications in mass media",
-    "multimedia",
-    "newsfeed",
-    "stories",
-    "facebook",
-    "youtube",
-    "linkedin",
-    "telegram",
+    "+7 (771) 759-59-44", "info@yessenovfoundation.org",
+    "mission and reports", "founder", "programs",
+    "the board of trustees", "the expert board",
+    "biography", "publications in mass media", "multimedia",
+    "newsfeed", "stories", "facebook", "youtube", "linkedin", "telegram",
+    "қаз", "рус", "eng", "(рус)", "(eng)", "(қаз)",
+    "миссия и отчёты", "попечительский совет", "экспертный совет",
+    "биография", "публикации в сми", "мультимедиа",
+    "наша миссия: развивать интеллектуальный потенциал казахстана",
+    "оставайтесь на связи",
+    "миссия және есептер", "қамқоршылар кеңесі", "сараптама кеңесі",
+    "өмірбаяны", "бұқаралық ақпарат құралдарындағы жарияланымдар",
 }
 
-def clean_text(soup):
-    """
-    Extract clean readable text from a BeautifulSoup page object.
-    Removes scripts, styles, nav, footer, and boilerplate lines.
-    """
-    # Remove unwanted HTML tags entirely
+
+def clean_text(soup) -> str:
     for tag in soup(["script", "style", "nav", "footer", "header",
-                      "noscript", "iframe", "img", "svg", "form"]):
+                     "noscript", "iframe", "img", "svg", "form"]):
         tag.decompose()
-
-    # Get raw text
     raw = soup.get_text(separator="\n")
-
-    # Clean line by line
     lines = []
     for line in raw.splitlines():
         line = line.strip()
-        # Skip empty lines
         if not line:
             continue
-        # Skip boilerplate (case-insensitive)
         if line.lower() in BOILERPLATE_LINES:
             continue
-        # Skip very short lines (likely nav fragments)
         if len(line) < 4:
             continue
-        # Skip lines that are just URLs
         if line.startswith("http") and " " not in line:
             continue
         lines.append(line)
-
-    # Collapse multiple blank lines into one
-    cleaned = "\n".join(lines)
-    return cleaned
+    return "\n".join(lines)
 
 
-# ─── URL FILTERING ────────────────────────────────────────────────────────────
+# ─── URL HELPERS ─────────────────────────────────────────────────────────────
 
-def is_valid_url(url):
-    """
-    Return True if the URL should be scraped:
-    - Must be on yessenovfoundation.org
-    - Must be under /en/ (English version)
-    - Skip media files, pagination, anchors, external links
-    """
+def is_valid_url(url: str, lang_prefix: str) -> bool:
     parsed = urlparse(url)
-
     if DOMAIN not in parsed.netloc:
         return False
-    if not parsed.path.startswith("/en/"):
+    # Accept both the standard lang-prefixed path AND no-prefix active-program URLs
+    if not parsed.path.startswith(lang_prefix) and not is_active_program_url(url):
         return False
-    # Skip media files
-    skip_extensions = (".jpg", ".jpeg", ".png", ".gif", ".pdf",
-                       ".mp4", ".mp3", ".zip", ".svg", ".webp")
-    if any(parsed.path.lower().endswith(ext) for ext in skip_extensions):
+    skip_ext = (".jpg", ".jpeg", ".png", ".gif", ".pdf",
+                ".mp4", ".mp3", ".zip", ".svg", ".webp")
+    if any(parsed.path.lower().endswith(e) for e in skip_ext):
         return False
-    # Skip pagination (?page=2 etc)
     if "page=" in parsed.query:
-        return False
-    # Skip anchors-only
-    if parsed.fragment and not parsed.path:
         return False
     return True
 
 
-def normalize_url(url):
-    """Remove fragments and trailing slashes inconsistencies."""
+def normalize_url(url: str) -> str:
     parsed = urlparse(url)
-    # Remove fragment
-    clean = parsed._replace(fragment="")
-    return clean.geturl()
+    return parsed._replace(fragment="").geturl()
 
 
-# ─── SCRAPING ─────────────────────────────────────────────────────────────────
+# ─── FETCHING ────────────────────────────────────────────────────────────────
 
-def fetch_page(url, session):
-    """Fetch a URL and return BeautifulSoup object, or None on error."""
+def fetch_page(url: str, session: requests.Session):
     try:
         headers = {"User-Agent": "YessenovBot/1.0 (educational chatbot project)"}
-        response = session.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        return soup
+        resp = session.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        return BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
-        print(f"  ⚠️  Error fetching {url}: {e}")
+        print(f"  ⚠️  {url}: {e}")
         return None
 
 
-def get_page_title(soup):
-    """Get the page title from <h1> or <title> tag."""
+def get_page_title(soup) -> str:
     h1 = soup.find("h1")
     if h1:
         return h1.get_text(strip=True)
-    title = soup.find("title")
-    if title:
-        # Clean up " — Shakhmardan Yessenov Foundation" suffix
-        t = title.get_text(strip=True)
-        return t.split(" — ")[0].strip()
+    t = soup.find("title")
+    if t:
+        return t.get_text(strip=True).split(" — ")[0].strip()
     return "No title"
 
 
-def extract_links(soup, current_url):
-    """Extract all internal English links from the page."""
+def extract_links(soup, current_url: str, lang_prefix: str) -> set[str]:
     links = set()
     for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        # Make absolute
-        full_url = urljoin(current_url, href)
-        full_url = normalize_url(full_url)
-        if is_valid_url(full_url):
-            links.add(full_url)
+        full = normalize_url(urljoin(current_url, a["href"].strip()))
+        if is_valid_url(full, lang_prefix):
+            links.add(full)
     return links
 
 
-# ─── MAIN ─────────────────────────────────────────────────────────────────────
+# ─── SAVE HELPERS ────────────────────────────────────────────────────────────
 
-def main():
-    print("=" * 60)
-    print("  Yessenov Foundation Scraper")
-    print("=" * 60)
-
-    # Create output directory
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    # Track all visited URLs and collected data
-    visited   = set()
-    to_visit  = []   # queue of URLs to scrape
-    results   = []   # list of {title, url, text} dicts
-
-    # Start with priority URLs (always scraped)
-    print(f"\n📌 Priority URLs: {len(PRIORITY_URLS)}")
-    for url in PRIORITY_URLS:
-        url = normalize_url(url)
-        if url not in visited:
-            to_visit.append(url)
-            visited.add(url)
-
-    # Also seed crawler from home page
-    home = normalize_url(BASE_URL)
-    if home not in visited:
-        to_visit.insert(0, home)
-        visited.add(home)
-
-    session = requests.Session()
-    crawl_count = 0   # counts only auto-discovered pages (not priority)
-
-    print(f"🚀 Starting scrape...\n")
-
-    i = 0
-    while i < len(to_visit):
-        url = to_visit[i]
-        i += 1
-
-        # Check if this is a priority URL or auto-discovered
-        is_priority = url in [normalize_url(u) for u in PRIORITY_URLS] or url == home
-
-        # Enforce crawl limit only for auto-discovered pages
-        if not is_priority:
-            if crawl_count >= MAX_CRAWL_PAGES:
-                continue
-            crawl_count += 1
-
-        print(f"[{len(results)+1}] Scraping: {url}")
-
-        soup = fetch_page(url, session)
-        if soup is None:
-            time.sleep(DELAY_SECONDS)
-            continue
-
-        # Extract title and clean text
-        title = get_page_title(soup)
-        text  = clean_text(soup)
-
-        # Skip pages with almost no content
-        if len(text) < 100:
-            print(f"       ↳ Skipped (too little text)")
-            time.sleep(DELAY_SECONDS)
-            continue
-
-        results.append({
-            "title": title,
-            "url":   url,
-            "text":  text
-        })
-        print(f"       ↳ ✅ '{title}' ({len(text)} chars)")
-
-        # Discover new links and add to queue
-        new_links = extract_links(soup, url)
-        added = 0
-        for link in sorted(new_links):  # sorted for reproducibility
-            if link not in visited:
-                visited.add(link)
-                to_visit.append(link)
-                added += 1
-
-        if added:
-            print(f"       ↳ 🔗 Found {added} new links")
-
-        # Polite delay
-        time.sleep(DELAY_SECONDS)
-
-    # ─── SAVE RESULTS ─────────────────────────────────────────────────────────
-
-    print("\n" + "=" * 60)
-    print(f"  Scraping complete! Total pages: {len(results)}")
-    print("=" * 60)
-
-    # Save JSON
-    with open(JSON_FILE, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f"\n💾 JSON saved → {JSON_FILE}")
-
-    # Save plain text (all pages concatenated, good for TF-IDF / embeddings)
-    with open(TEXT_FILE, "w", encoding="utf-8") as f:
-        for page in results:
+def save_txt(pages: list[dict], path: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for page in pages:
             f.write(f"\n{'='*60}\n")
             f.write(f"PAGE: {page['title']}\n")
             f.write(f"URL:  {page['url']}\n")
             f.write(f"{'='*60}\n\n")
             f.write(page["text"])
             f.write("\n")
-    print(f"📄 Text saved  → {TEXT_FILE}")
 
-    # Print summary table
-    print("\n📊 Pages scraped:")
-    print(f"  {'#':<4} {'Title':<50} {'Chars':>6}")
-    print(f"  {'-'*4} {'-'*50} {'-'*6}")
-    for idx, page in enumerate(results, 1):
-        title_short = page["title"][:48] + ".." if len(page["title"]) > 50 else page["title"]
-        print(f"  {idx:<4} {title_short:<50} {len(page['text']):>6}")
 
-    total_chars = sum(len(p["text"]) for p in results)
-    print(f"\n  Total text collected: {total_chars:,} characters")
-    print(f"  Saved to: {OUTPUT_DIR}/")
+# ─── SCRAPE ONE LANGUAGE ─────────────────────────────────────────────────────
+
+def scrape_language(lang: dict, session: requests.Session,
+                    extra_urls: list[str] | None = None) -> list[dict]:
+    code   = lang["code"]
+    label  = lang["label"]
+    prefix = lang["prefix"]
+    base   = f"https://{DOMAIN}{prefix}"
+
+    print(f"\n{'─'*60}")
+    print(f"  Language: {label} ({code})  →  {base}")
+    print(f"{'─'*60}")
+
+    priority_set = set(normalize_url(u) for u in priority_urls_for(prefix))
+    extra_set    = set(normalize_url(u) for u in (extra_urls or []))
+
+    # Seed the queue: home page first, then priority, then extras
+    to_visit = (
+        [normalize_url(base)]
+        + sorted(priority_set)
+        + sorted(extra_set)
+    )
+    visited = set(to_visit)
+    results = []
+    crawl_count = 0  # counts only auto-discovered (non-priority, non-active-program) pages
+
+    i = 0
+    while i < len(to_visit):
+        url = to_visit[i]
+        i += 1
+
+        # Decide whether this counts against the crawl cap
+        is_priority       = url in priority_set or url == normalize_url(base)
+        is_extra          = url in extra_set
+        is_active_program = is_active_program_url(url)
+
+        if not (is_priority or is_extra or is_active_program):
+            if crawl_count >= MAX_CRAWL_PAGES:
+                continue
+            crawl_count += 1
+
+        print(f"[{len(results)+1}] {url}")
+        soup = fetch_page(url, session)
+        if soup is None:
+            time.sleep(DELAY_SECONDS)
+            continue
+
+        title = get_page_title(soup)
+        text  = clean_text(soup)
+
+        if len(text) < 100:
+            print("       ↳ skipped (too little text)")
+            time.sleep(DELAY_SECONDS)
+            continue
+
+        results.append({
+            "title":      title,
+            "url":        url,
+            "lang":       code,
+            "lang_label": label,
+            "text":       text,
+        })
+        print(f"       ↳ ✅ '{title}' ({len(text)} chars)")
+
+        new_links = extract_links(soup, url, prefix)
+        added = 0
+        for link in sorted(new_links):
+            if link not in visited:
+                visited.add(link)
+                to_visit.append(link)
+                added += 1
+        if added:
+            print(f"       ↳ 🔗 {added} new links")
+
+        time.sleep(DELAY_SECONDS)
+
+    print(f"\n  Done: {len(results)} pages — {label}")
+    return results
+
+
+# ─── MAIN ────────────────────────────────────────────────────────────────────
+
+def main():
+    print("=" * 60)
+    print("  Yessenov Foundation Scraper — EN / RU / KK")
+    print("=" * 60)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    session     = requests.Session()
+    all_results = []
+
+    for lang in LANGUAGES:
+        # Pass no-prefix extra URLs only to Russian (that's where they serve)
+        extras = EXTRA_URLS_RU if lang["code"] == "ru" else []
+        pages  = scrape_language(lang, session, extra_urls=extras)
+        all_results.extend(pages)
+
+        txt_path = os.path.join(OUTPUT_DIR, f"yessenov_{lang['code']}.txt")
+        save_txt(pages, txt_path)
+        print(f"  📄 {txt_path}  ({len(pages)} pages)")
+
+    json_path = os.path.join(OUTPUT_DIR, "yessenov_pages.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, ensure_ascii=False, indent=2)
+    print(f"\n  💾 JSON → {json_path}  ({len(all_results)} total)")
+
+    legacy_path = os.path.join(OUTPUT_DIR, "yessenov_text.txt")
+    save_txt(all_results, legacy_path)
+    print(f"  📄 Legacy → {legacy_path}")
+
+    print("\n" + "=" * 60)
+    for lang in LANGUAGES:
+        n = sum(1 for p in all_results if p["lang"] == lang["code"])
+        c = sum(len(p["text"]) for p in all_results if p["lang"] == lang["code"])
+        print(f"  {lang['label']:12} {n:3} pages  {c:>9,} chars")
+    total_c = sum(len(p["text"]) for p in all_results)
+    print(f"  {'TOTAL':12} {len(all_results):3} pages  {total_c:>9,} chars")
 
 
 if __name__ == "__main__":
