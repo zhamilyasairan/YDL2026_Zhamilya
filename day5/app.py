@@ -38,7 +38,6 @@ DATA_FILES = {
 LANG_MAP    = {"en": "en", "ru": "ru", "kk": "kk", "uk": "ru", "be": "ru"}
 LANG_LABELS = {"en": "English", "ru": "Русский", "kk": "Қазақша"}
 
-# ── Multilingual UI strings ───────────────────────────────────────────────────
 CLARIFY_TEXT = {
     "en": "Which program are you interested in?",
     "ru": "Какая именно программа вас интересует?",
@@ -52,10 +51,8 @@ NO_DATA_TEXT   = {
     "kk": "Менде бұл ақпарат жоқ.",
 }
 
-# ── Порог для отправки email ──────────────────────────────────────────────────
-EMAIL_TRIGGER_COUNT = 5   # отправляем после 5-го вопроса от пользователя
+EMAIL_TRIGGER_COUNT = 5
 
-# ── Quick question buttons ────────────────────────────────────────────────────
 QUICK_QUESTIONS = [
     {"label": "📋 Какие программы есть?",      "question": "Какие программы есть у фонда Есенова?"},
     {"label": "📅 Дедлайн YDL 2026?",          "question": "Когда дедлайн подачи заявки на Yessenov Data Lab 2026?"},
@@ -65,7 +62,6 @@ QUICK_QUESTIONS = [
     {"label": "🚀 Что такое Launch Pad?",       "question": "Что такое Yessenov Launch Pad?"},
 ]
 
-# ── Active programs ───────────────────────────────────────────────────────────
 PROGRAMS = [
     {
         "name":        "Yessenov Scholarship",
@@ -155,13 +151,17 @@ STOPWORDS = {
 _SEP     = re.compile(r"={20,}\nPAGE:\s*(.+?)\nURL:\s*(\S+)\n={20,}", re.MULTILINE)
 _YEAR_RE = re.compile(r'\b(201[3-9]|202[0-9]|2030)\b')
 
+# Regex для извлечения ссылок на yessenovfoundation.org из текста ответа
+_URL_RE  = re.compile(r'https?://yessenovfoundation\.org/[^\s\)\]]+')
+
 SYSTEM_PROMPT = """You are an assistant for the Shakhmardan Yessenov Foundation.
 
 STRICT RULES — no exceptions:
 1. Answer ONLY using the SOURCE sections provided. Never use your own training knowledge.
 2. Do NOT invent program names, subcategories, deadlines, amounts, or requirements.
 3. Do NOT add structure (bullet points, sections) that is not in the sources.
-4. At the end of every answer, cite which source(s) you used: page title and URL.
+4. At the end of every answer, cite which source(s) you used: page title ONLY. 
+   Do NOT include URLs or links in your answer — they will be shown separately as a button.
 5. If the answer is not in the sources, respond:
    English → "I don't have this information."
    Russian → "У меня нет такой информации."
@@ -178,12 +178,28 @@ Be concise and factual. Do not add anything not in the conversation."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: кнопка "Открыть страницу"
+# ─────────────────────────────────────────────────────────────────────────────
+
+def show_source_button(answer: str):
+    """
+    Извлекает ссылки на yessenovfoundation.org из текста ответа
+    и показывает красивую кнопку вместо голой ссылки.
+    """
+    urls = _URL_RE.findall(answer)
+    seen = set()
+    for url in urls:
+        url = url.rstrip(".,)")  # убираем знаки препинания в конце
+        if url not in seen:
+            seen.add(url)
+            st.link_button("🔗 Открыть страницу →", url)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # EMAIL FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_summary(messages: list[dict]) -> str:
-    """Просим LLM сделать краткое саммари разговора."""
-    # Собираем историю в текст
     history = ""
     for msg in messages:
         role = "Пользователь" if msg["role"] == "user" else "Бот"
@@ -196,10 +212,7 @@ def generate_summary(messages: list[dict]) -> str:
     try:
         resp = requests.post(
             url,
-            headers={
-                "Authorization": f"Bearer {LLM_API_KEY}",
-                "Content-Type": "application/json"
-            },
+            headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": LLM_MODEL,
                 "messages": [
@@ -217,13 +230,9 @@ def generate_summary(messages: list[dict]) -> str:
 
 
 def send_summary_email(summary: str, messages: list[dict]) -> bool:
-    """Отправляем саммари + полную историю на ADMIN_EMAIL через MailerSend."""
-    if not MAILERSEND_OK:
-        return False
-    if not MAILERSEND_KEY or not ADMIN_EMAIL:
+    if not MAILERSEND_OK or not MAILERSEND_KEY or not ADMIN_EMAIL:
         return False
 
-    # Полная история для тела письма
     full_history = ""
     for msg in messages:
         role = "👤 Пользователь" if msg["role"] == "user" else "🤖 Бот"
@@ -246,7 +255,7 @@ def send_summary_email(summary: str, messages: list[dict]) -> bool:
         mailer.set_subject("📬 Новый разговор в боте Есенова", mail_body)
         mailer.set_html_content(html_body, mail_body)
         mailer.set_plaintext_content(f"Саммари:\n{summary}", mail_body)
-        response = mailer.send(mail_body)
+        mailer.send(mail_body)
         return True
     except Exception as e:
         st.sidebar.error(f"Ошибка отправки email: {e}")
@@ -254,22 +263,14 @@ def send_summary_email(summary: str, messages: list[dict]) -> bool:
 
 
 def maybe_send_email():
-    """
-    Проверяем количество вопросов пользователя.
-    Если достигли EMAIL_TRIGGER_COUNT и письмо ещё не отправлено — отправляем.
-    """
-    messages = st.session_state.get("messages", [])
+    messages     = st.session_state.get("messages", [])
     user_messages = [m for m in messages if m["role"] == "user"]
     already_sent  = st.session_state.get("email_sent_at", 0)
-
-    # Считаем сколько новых вопросов с последней отправки
     count = len(user_messages)
     if count > 0 and count % EMAIL_TRIGGER_COUNT == 0 and count != already_sent:
-        # Генерируем саммари через LLM
         with st.spinner("📧 Сохраняем историю разговора..."):
             summary = generate_summary(messages)
             success = send_summary_email(summary, messages)
-
         if success:
             st.session_state["email_sent_at"] = count
             st.toast("📧 История разговора сохранена!", icon="✅")
@@ -353,19 +354,15 @@ def select_year_filtered_pages(pages, asked_year):
     tagged    = [(page, extract_year_from_page(page)) for page in pages]
     overview  = [p for p, y in tagged if y is None]
     with_year = [(p, y) for p, y in tagged if y is not None]
-
     if not with_year:
         return pages, None, "latest (no dated pages)"
-
     all_years = [y for _, y in with_year]
-
     if asked_year is not None:
         year_pages = [p for p, y in with_year if y == asked_year]
         if year_pages:
             return overview + year_pages, asked_year, "exact year"
         latest = max(all_years)
         return overview + [p for p, y in with_year if y == latest], latest, "exact year (not found, using latest)"
-
     latest = max(all_years)
     return overview + [p for p, y in with_year if y == latest], latest, "latest"
 
@@ -489,9 +486,36 @@ def answer_question(question: str, lang: str, program_name: str | None = None) -
 # ─────────────────────────────────────────────────────────────────────────────
 
 def handle_question(question: str):
-    """Единая функция обработки вопроса."""
 
-    # Специальный ответ для вопроса о списке программ
+    # ── Фильтр нерелевантных вопросов ────────────────────────────────────────
+    RELEVANT_KEYWORDS = [
+        # программы
+        "программ", "стипенди", "стажировк", "грант", "заявк", "документ",
+        "дедлайн", "срок", "требован", "участ", "подать", "english", "data lab",
+        "ydl", "launch pad", "scholarship", "internship", "есенов", "yessenov",
+        "фонд", "foundation", "обучен", "конкурс", "победител", "winners",
+        "apply", "requirement", "deadline", "program", "бағдарлама", "шәкіртақы",
+        "тағылымдама", "өтінім", "талап", "мерзім",
+    ]
+    q_lower = question.lower()
+    is_relevant = any(kw in q_lower for kw in RELEVANT_KEYWORDS)
+
+    if not is_relevant:
+        lang = detect_lang(question)
+        st.session_state.messages.append({"role": "user", "content": question, "lang": lang})
+        if lang == "ru":
+            off_topic = "Я отвечаю только на вопросы о программах фонда Есенова. Спросите о стипендии, стажировках, YDL или других программах."
+        elif lang == "kk":
+            off_topic = "Мен тек Есенов қорының бағдарламалары туралы сұрақтарға жауап беремін."
+        else:
+            off_topic = "I can only answer questions about Yessenov Foundation programs. Please ask about scholarships, internships, YDL, or other programs."
+        with st.chat_message("user"):
+            st.caption(f"Detected language: {LANG_LABELS[lang]}")
+            st.write(question)
+        with st.chat_message("assistant"):
+            st.write(off_topic)
+        st.session_state.messages.append({"role": "assistant", "content": off_topic})
+        return
     PROGRAMS_KEYWORDS = [
         "какие программы", "список программ", "what programs",
         "программы фонда", "programs", "бағдарламалар"
@@ -535,9 +559,8 @@ def handle_question(question: str):
             st.write(question)
         with st.chat_message("assistant"):
             st.write(answer)
+            show_source_button(answer)  # ← кнопка
         st.session_state.messages.append({"role": "assistant", "content": answer})
-
-        # Проверяем нужно ли отправить email
         maybe_send_email()
         return
 
@@ -562,9 +585,8 @@ def handle_question(question: str):
             with st.spinner("Thinking..."):
                 answer = answer_question(question, lang)
             st.write(answer)
+            show_source_button(answer)  # ← кнопка
         st.session_state.messages.append({"role": "assistant", "content": answer})
-
-        # Проверяем нужно ли отправить email
         maybe_send_email()
 
 
@@ -585,14 +607,13 @@ if not LANGDETECT_OK:
 if not MAILERSEND_OK:
     st.warning("mailersend not installed. Run: pip install mailersend")
 
-# ── Debug sidebar ─────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Settings")
     show_debug = st.checkbox("Show debug info", value=False)
 
-    # Счётчик вопросов
     user_q_count = len([m for m in st.session_state.get("messages", []) if m["role"] == "user"])
-    st.caption(f"Вопросов задано: {user_q_count} / следующий email после {EMAIL_TRIGGER_COUNT - (user_q_count % EMAIL_TRIGGER_COUNT) if user_q_count % EMAIL_TRIGGER_COUNT != 0 else 0} вопросов")
+    remaining = EMAIL_TRIGGER_COUNT - (user_q_count % EMAIL_TRIGGER_COUNT) if user_q_count % EMAIL_TRIGGER_COUNT != 0 else 0
+    st.caption(f"Вопросов задано: {user_q_count} / следующий email через {remaining} вопросов")
 
     if show_debug and "last_debug" in st.session_state:
         d = st.session_state["last_debug"]
@@ -614,20 +635,17 @@ with st.sidebar:
         for title, score in d["all_scores"]:
             st.write(f"  `{score:4}` {title}")
 
-# ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "email_sent_at" not in st.session_state:
     st.session_state.email_sent_at = 0
 
-# ── Chat history ──────────────────────────────────────────────────────────────
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if msg["role"] == "user" and "lang" in msg:
             st.caption(f"Detected language: {LANG_LABELS[msg['lang']]}")
         st.write(msg["content"])
 
-# ── Clarification selectbox ───────────────────────────────────────────────────
 if st.session_state.get("pending_question"):
     lang = st.session_state["pending_lang"]
     with st.form("clarify_form"):
@@ -651,12 +669,10 @@ if st.session_state.get("pending_question"):
         maybe_send_email()
         st.rerun()
 
-# ── Chat input ────────────────────────────────────────────────────────────────
 question = st.chat_input("Ask a question / Задайте вопрос / Сұрақ қойыңыз")
 if question:
     handle_question(question)
 
-# ── Quick question buttons ────────────────────────────────────────────────────
 st.divider()
 st.caption("Быстрые вопросы / Quick questions:")
 
